@@ -1,47 +1,50 @@
-import os
-import requests
+import os, requests, sys, time
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-import sys
 
-def download_recursive(url, local_path):
-    if not os.path.exists(local_path):
-        os.makedirs(local_path)
-
+def download_file(url, folder, name):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     try:
-        response = requests.get(url, timeout=10)
-        # If it's a directory listing (common for these game folders)
-        if "Index of" in response.text or response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for link in soup.find_all('a'):
-                href = link.get('href')
-                if href in ['../', './', '/'] or '?' in href:
-                    continue
-                
-                full_url = urljoin(url, href)
-                # Keep it within the same game folder
-                if not full_url.startswith(url):
-                    continue
+        res = requests.get(url, headers=headers, stream=True, timeout=10)
+        if res.status_code == 200:
+            path = os.path.join(folder, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as f:
+                for chunk in res.iter_content(8192):
+                    f.write(chunk)
+            print(f"Successfully downloaded: {name}")
+            return True
+    except:
+        pass
+    return False
 
-                local_file = os.path.join(local_path, href.strip('/'))
+def start_crawl(base_url, folder_name):
+    # Ensure folder name has no spaces for Linux safety
+    safe_folder = folder_name.replace(" ", "_")
+    if not os.path.exists(safe_folder):
+        os.makedirs(safe_folder)
 
-                if href.endswith('/'):
-                    # It's a subdirectory
-                    download_recursive(full_url, local_file)
-                else:
-                    # It's a file
-                    print(f"Downloading: {href}")
-                    with requests.get(full_url, stream=True) as r:
-                        r.raise_for_status()
-                        os.makedirs(os.path.dirname(local_file), exist_ok=True)
-                        with open(local_file, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-    except Exception as e:
-        print(f"Error: {e}")
+    # 1. Try to find links automatically
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        page = requests.get(base_url, headers=headers)
+        soup = BeautifulSoup(page.text, 'html.parser')
+        links = [a.get('href') for a in soup.find_all('a') if a.get('href')]
+    except:
+        links = []
+
+    # 2. Add 'Guaranteed' files to check if no links found
+    test_files = ['index.html', 'main.js', 'game.js', 'style.css', 'manifest.json']
+    final_list = list(set(links + test_files))
+
+    print(f"Checking {len(final_list)} potential files...")
+    for item in final_list:
+        if item.startswith(('http', '?', '/')): continue
+        download_file(urljoin(base_url, item), safe_folder, item)
+        time.sleep(0.5) # Slow down to avoid being blocked
 
 if __name__ == "__main__":
-    # These values come from GitHub Actions
-    target_url = sys.argv[1]
-    folder_name = sys.argv[2]
-    download_recursive(target_url, folder_name)
+    if len(sys.argv) > 2:
+        start_crawl(sys.argv[1], sys.argv[2])
