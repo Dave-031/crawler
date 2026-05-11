@@ -1,50 +1,42 @@
-import os, requests, sys, time
+import os, requests, sys, re, time
 from urllib.parse import urljoin
-from bs4 import BeautifulSoup
 
-def download_file(url, folder, name):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+def download_and_scan(url, base_url, folder, visited):
+    if url in visited or not url.startswith(base_url):
+        return
+    visited.add(url)
+
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        res = requests.get(url, headers=headers, stream=True, timeout=10)
-        if res.status_code == 200:
-            path = os.path.join(folder, name)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'wb') as f:
-                for chunk in res.iter_content(8192):
-                    f.write(chunk)
-            print(f"Successfully downloaded: {name}")
-            return True
-    except:
-        pass
-    return False
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200: return
 
-def start_crawl(base_url, folder_name):
-    # Ensure folder name has no spaces for Linux safety
-    safe_folder = folder_name.replace(" ", "_")
-    if not os.path.exists(safe_folder):
-        os.makedirs(safe_folder)
+        # Determine where to save the file locally
+        relative_path = url.replace(base_url, "").lstrip("/")
+        if not relative_path: relative_path = "index.html"
+        local_path = os.path.join(folder, relative_path)
+        
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, 'wb') as f:
+            f.write(res.content)
+        print(f"Downloaded: {relative_path}")
 
-    # 1. Try to find links automatically
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        page = requests.get(base_url, headers=headers)
-        soup = BeautifulSoup(page.text, 'html.parser')
-        links = [a.get('href') for a in soup.find_all('a') if a.get('href')]
-    except:
-        links = []
+        # If it's a text-based file, look for more asset links inside it
+        if url.endswith(('.html', '.js', '.json', '.css')):
+            content = res.text
+            # Look for common file extensions in quotes
+            pattern = r'["\']([^"\']+\.(?:js|json|png|jpg|mp3|wav|ogg|atlas|fnt|xml))["\']'
+            found_assets = re.findall(pattern, content)
 
-    # 2. Add 'Guaranteed' files to check if no links found
-    test_files = ['index.html', 'main.js', 'game.js', 'style.css', 'manifest.json']
-    final_list = list(set(links + test_files))
+            for asset in found_assets:
+                full_asset_url = urljoin(url, asset)
+                time.sleep(0.1) # Small delay
+                download_and_scan(full_asset_url, base_url, folder, visited)
 
-    print(f"Checking {len(final_list)} potential files...")
-    for item in final_list:
-        if item.startswith(('http', '?', '/')): continue
-        download_file(urljoin(base_url, item), safe_folder, item)
-        time.sleep(0.5) # Slow down to avoid being blocked
+    except Exception as e:
+        print(f"Failed {url}: {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
-        start_crawl(sys.argv[1], sys.argv[2])
+    target_url = sys.argv[1]
+    folder_name = sys.argv[2].replace(" ", "_")
+    download_and_scan(target_url, target_url, folder_name, set())
